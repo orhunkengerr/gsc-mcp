@@ -3,12 +3,17 @@ import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { open } from "@/lib/auth/crypto";
 import type { AccessToken } from "@/lib/auth/types";
 import { registerAnalyticsTools } from "@/tools/analytics";
+import { registerBlendTools } from "@/tools/blend";
 import { registerCompareTools } from "@/tools/compare";
 import { registerGa4Tools } from "@/tools/ga4";
 import { registerIndexingTools } from "@/tools/indexing";
 import { registerInsightTools } from "@/tools/insights";
 import { registerManageTools } from "@/tools/manage";
+import { registerOpportunityTools } from "@/tools/opportunities";
 import { registerSiteTools } from "@/tools/sites";
+
+// Toplu URL denetimi ve büyük raporlar uzun sürebiliyor.
+export const maxDuration = 300;
 
 const handler = createMcpHandler(
   (server) => {
@@ -19,6 +24,8 @@ const handler = createMcpHandler(
     registerIndexingTools(server);
     registerManageTools(server);
     registerGa4Tools(server);
+    registerOpportunityTools(server);
+    registerBlendTools(server);
   },
   { serverInfo: { name: "gsc-mcp", version: "0.1.0" } },
 );
