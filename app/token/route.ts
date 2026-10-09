@@ -28,10 +28,10 @@ function tokenResponse(
   const refresh: RefreshToken = { client_id: clientId, google_refresh_token: googleRefreshToken };
   return Response.json(
     {
-      access_token: seal(access, expiresIn),
+      access_token: seal("access", access, expiresIn),
       token_type: "Bearer",
       expires_in: expiresIn,
-      refresh_token: seal(refresh, REFRESH_TTL_SECONDS),
+      refresh_token: seal("refresh", refresh, REFRESH_TTL_SECONDS),
       scope: "gsc",
     },
     { headers: { ...cors, "Cache-Control": "no-store" } },
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
   const grantType = params.get("grant_type");
 
   if (grantType === "authorization_code") {
-    const code = open<AuthorizationCode>(params.get("code") ?? "");
+    const code = open<AuthorizationCode>("code", params.get("code") ?? "");
     if (!code) return oauthError("invalid_grant", "Kod geçersiz veya süresi dolmuş");
     if (params.get("client_id") !== code.client_id) {
       return oauthError("invalid_grant", "client_id uyuşmuyor");
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
   }
 
   if (grantType === "refresh_token") {
-    const refresh = open<RefreshToken>(params.get("refresh_token") ?? "");
+    const refresh = open<RefreshToken>("refresh", params.get("refresh_token") ?? "");
     if (!refresh) return oauthError("invalid_grant", "Yenileme anahtarı geçersiz");
     const clientId = params.get("client_id");
     if (clientId && clientId !== refresh.client_id) {

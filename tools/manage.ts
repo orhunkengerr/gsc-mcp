@@ -18,7 +18,7 @@ export function registerManageTools(server: McpServer) {
         "Site haritasını Search Console'a gönderir veya yeniden gönderir; Google'a haritayı tekrar okumasını söyler. " +
         "Yeni veya güncellenen sayfaların daha erken taranmasına yardım eder.",
       inputSchema: z.object({ siteUrl: siteUrlSchema, feedpath: feedpathSchema }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (args, ctx) => {
       await submitSitemap(googleAccessToken(ctx), args.siteUrl, args.feedpath);
@@ -34,7 +34,7 @@ export function registerManageTools(server: McpServer) {
         "Site haritasını Search Console'dan kaldırır. Geri alınamaz; gerekirse submit_sitemap ile yeniden gönderilir. " +
         "Çalıştırmadan önce kullanıcıdan açık onay al.",
       inputSchema: z.object({ siteUrl: siteUrlSchema, feedpath: feedpathSchema }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async (args, ctx) => {
       await deleteSitemap(googleAccessToken(ctx), args.siteUrl, args.feedpath);
@@ -50,7 +50,7 @@ export function registerManageTools(server: McpServer) {
         "Search Console hesabına yeni bir mülk ekler. Mülk doğrulanmamış olarak eklenir; veriye erişmek için " +
         "sahipliğin Search Console arayüzünden doğrulanması gerekir. Örn. 'https://ornek.com/' veya 'sc-domain:ornek.com'.",
       inputSchema: z.object({ siteUrl: siteUrlSchema }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (args, ctx) => {
       await addSite(googleAccessToken(ctx), args.siteUrl);
@@ -66,7 +66,7 @@ export function registerManageTools(server: McpServer) {
         "Mülkü kullanıcının Search Console hesabından kaldırır. Geri alınamaz; yeniden eklemek doğrulama gerektirebilir " +
         "ve diğer kullanıcıların erişimini etkileyebilir. Çalıştırmadan önce kullanıcıdan açık onay al.",
       inputSchema: z.object({ siteUrl: siteUrlSchema }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async (args, ctx) => {
       await removeSite(googleAccessToken(ctx), args.siteUrl);

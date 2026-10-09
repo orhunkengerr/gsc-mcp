@@ -1,11 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { listGa4Properties, runGa4Report } from "@/services/ga4/client";
+import { GA4_PROPERTY_PATTERN, listGa4Properties, runGa4Report } from "@/services/ga4/client";
 import { googleAccessToken } from "@/tools/auth";
-import { textResult } from "@/tools/shared";
+import { READ_ONLY, textResult } from "@/tools/shared";
 
-const propertySchema = z
+const MAX_ROW_LIMIT = 1000;
+
+export const propertySchema = z
   .string()
+  .regex(GA4_PROPERTY_PATTERN, "GA4 mülkü 'properties/123456789' biçiminde olmalı")
   .describe("GA4 mülkü, ga4_list_properties çıktısındaki gibi (örn. 'properties/123456789')");
 const gaDateSchema = z
   .string()
@@ -13,7 +16,7 @@ const gaDateSchema = z
 
 // Yapay zekâ asistanlarından gelen trafiğin kaynak adları.
 const AI_SOURCES_REGEX =
-  ".*(chatgpt|openai|perplexity|claude\\.ai|anthropic|gemini|bard|copilot|you\\.com|phind|deepseek|grok|meta\\.ai|mistral).*";
+  ".*(chatgpt|openai|perplexity|claude\\.ai|anthropic|gemini|copilot|edgeservices|you\\.com|phind|deepseek|grok|meta\\.ai|mistral).*";
 
 const MATCH_TYPES = ["EXACT", "BEGINS_WITH", "ENDS_WITH", "CONTAINS", "FULL_REGEXP", "PARTIAL_REGEXP"] as const;
 
@@ -22,9 +25,11 @@ export function registerGa4Tools(server: McpServer) {
     "ga4_list_properties",
     {
       title: "GA4 mülkleri",
-      description: "Kullanıcının erişebildiği Google Analytics 4 hesaplarını ve mülklerini listeler.",
+      description:
+        "Kullanıcının erişebildiği Google Analytics 4 hesaplarını ve mülklerini listeler. " +
+        "GA4 araçlarından önce çağır; property bu çıktıdaki 'properties/123' değeridir.",
       inputSchema: z.object({}),
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY,
     },
     async (_args, ctx) => {
       return textResult({ properties: await listGa4Properties(googleAccessToken(ctx)) });
@@ -40,8 +45,11 @@ export function registerGa4Tools(server: McpServer) {
         "boyutlar: date, sessionSource, sessionMedium, sessionDefaultChannelGroup, landingPage, " +
         "landingPagePlusQueryString, pagePath, country, deviceCategory, eventName; " +
         "metrikler: sessions, totalUsers, newUsers, engagedSessions, engagementRate, averageSessionDuration, " +
-        "screenPageViews, keyEvents, conversions, totalRevenue, purchaseRevenue, ecommercePurchases. " +
-        "Organik arama trafiği için sessionDefaultChannelGroup = 'Organic Search' filtresi kullan.",
+        "screenPageViews, keyEvents, keyEventRate, totalRevenue, purchaseRevenue, ecommercePurchases " +
+        "(dönüşüm için 'conversions' değil keyEvents kullan). " +
+        "Organik arama trafiği için sessionDefaultChannelGroup = 'Organic Search' filtresi kullan; yalnızca Google için " +
+        "sessionSource = 'google'. Tarih serilerinde orderBy=date ve orderDesc=false ver. totals tüm satırların toplamıdır. " +
+        `Tek çağrıda en fazla ${MAX_ROW_LIMIT} satır; devamı offset ile.`,
       inputSchema: z.object({
         property: propertySchema,
         startDate: gaDateSchema.optional().describe("Varsayılan 28daysAgo"),
@@ -59,11 +67,15 @@ export function registerGa4Tools(server: McpServer) {
           )
           .optional()
           .describe("Hepsi VE ile birleşir"),
-        orderByMetric: z.string().optional().describe("Bu metriğe göre azalan sıralama"),
-        limit: z.number().int().min(1).max(10000).optional().describe("Varsayılan 100"),
+        orderBy: z
+          .string()
+          .optional()
+          .describe("Sıralama alanı: isteğe eklenmiş bir metrik veya boyut. Varsayılan: date varsa date, yoksa ilk metrik"),
+        orderDesc: z.boolean().optional().describe("Azalan sıralama; metrikte varsayılan true, boyutta false"),
+        limit: z.number().int().min(1).max(MAX_ROW_LIMIT).optional().describe("Varsayılan 100"),
         offset: z.number().int().min(0).optional(),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY,
     },
     async (args, ctx) => {
       const expressions = (args.filters ?? []).map((f) => {
@@ -72,14 +84,24 @@ export function registerGa4Tools(server: McpServer) {
         };
         return f.not ? { notExpression: expr } : expr;
       });
+      const dimensions = args.dimensions ?? [];
+      const orderField = args.orderBy ?? (dimensions.includes("date") ? "date" : args.metrics[0]);
+      const isMetric = args.metrics.includes(orderField);
+      if (!isMetric && !dimensions.includes(orderField)) {
+        throw new Error(`orderBy '${orderField}' istekteki metriklerden veya boyutlardan biri olmalı.`);
+      }
+      const desc = args.orderDesc ?? isMetric;
       const report = await runGa4Report(googleAccessToken(ctx), args.property, {
         dateRanges: [{ startDate: args.startDate ?? "28daysAgo", endDate: args.endDate ?? "yesterday" }],
-        dimensions: args.dimensions?.map((name) => ({ name })),
+        dimensions: dimensions.map((name) => ({ name })),
         metrics: args.metrics.map((name) => ({ name })),
         dimensionFilter: expressions.length ? { andGroup: { expressions } } : undefined,
         orderBys: [
-          { metric: { metricName: args.orderByMetric ?? args.metrics[0] }, desc: true },
+          isMetric
+            ? { metric: { metricName: orderField }, desc }
+            : { dimension: { dimensionName: orderField }, desc },
         ],
+        metricAggregations: ["TOTAL"],
         limit: args.limit ?? 100,
         offset: args.offset,
       });
@@ -93,15 +115,16 @@ export function registerGa4Tools(server: McpServer) {
       title: "Yapay zekâ trafiği",
       description:
         "ChatGPT, Perplexity, Claude, Gemini, Copilot gibi yapay zekâ asistanlarından gelen ziyaretleri " +
-        "kaynak ve giriş sayfası bazında verir (oturum, kullanıcı, etkileşimli oturum, anahtar etkinlik).",
+        "kaynak ve giriş sayfası bazında verir (oturum, kullanıcı, etkileşimli oturum, etkileşim oranı, anahtar etkinlik). " +
+        "totals tüm yapay zekâ trafiğinin toplamıdır.",
       inputSchema: z.object({
         property: propertySchema,
         startDate: gaDateSchema.optional().describe("Varsayılan 28daysAgo"),
         endDate: gaDateSchema.optional().describe("Varsayılan yesterday"),
         byLandingPage: z.boolean().optional().describe("Giriş sayfası kırılımı, varsayılan true"),
-        limit: z.number().int().min(1).max(10000).optional().describe("Varsayılan 100"),
+        limit: z.number().int().min(1).max(MAX_ROW_LIMIT).optional().describe("Varsayılan 100"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY,
     },
     async (args, ctx) => {
       const dimensions = [{ name: "sessionSource" }];
@@ -113,6 +136,7 @@ export function registerGa4Tools(server: McpServer) {
           { name: "sessions" },
           { name: "totalUsers" },
           { name: "engagedSessions" },
+          { name: "engagementRate" },
           { name: "keyEvents" },
         ],
         dimensionFilter: {
@@ -122,6 +146,7 @@ export function registerGa4Tools(server: McpServer) {
           },
         },
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+        metricAggregations: ["TOTAL"],
         limit: args.limit ?? 100,
       });
       return textResult({ property: args.property, ...report });

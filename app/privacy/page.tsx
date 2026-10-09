@@ -23,7 +23,9 @@ export default function Privacy() {
         Nothing. GSC MCP has no database. Your Google tokens are encrypted and handed back to ChatGPT as the
         connection credential; the server keeps no copy. Search Console and Analytics data is fetched on demand,
         passed to ChatGPT in the response, and not saved or shared with anyone else. Only technical error
-        messages are kept in the hosting provider&apos;s short-lived logs.
+        messages are kept in the hosting provider&apos;s short-lived logs. When you ask for a sitemap check, the
+        list of URLs in your public sitemap may be kept in server memory for up to 10 minutes so follow-up pages of
+        the same check do not download it again.
       </p>
 
       <h2>Changes to your data</h2>
@@ -34,8 +36,10 @@ export default function Privacy() {
 
       <h2>Revoking access</h2>
       <p>
-        You can disconnect at any time by removing the connector in ChatGPT, or by removing &quot;GSC MCP&quot; at{" "}
-        <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+        Removing the connector in ChatGPT stops ChatGPT from using it. To fully revoke access, remove
+        &quot;GSC MCP&quot; at{" "}
+        <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>; after that, no
+        credential previously issued by GSC MCP can reach your data.
       </p>
 
       <h2>Google API Services User Data Policy</h2>

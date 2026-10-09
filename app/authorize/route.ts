@@ -1,7 +1,8 @@
+import { randomBytes } from "node:crypto";
 import { getPublicOrigin } from "mcp-handler";
 import { open, seal } from "@/lib/auth/crypto";
 import { buildGoogleAuthUrl } from "@/lib/auth/google";
-import type { PendingAuthorization, RegisteredClient } from "@/lib/auth/types";
+import { AUTH_NONCE_COOKIE, isRegisteredClient, type PendingAuthorization } from "@/lib/auth/types";
 
 const PENDING_TTL_SECONDS = 10 * 60;
 
@@ -22,8 +23,8 @@ export function GET(req: Request) {
   if (params.get("response_type") !== "code") return badRequest("response_type code olmalı");
   if (!clientId) return badRequest("client_id eksik");
 
-  const client = open<RegisteredClient>(clientId);
-  if (!client) return badRequest("Geçersiz client_id");
+  const client = open("client", clientId);
+  if (!isRegisteredClient(client)) return badRequest("Geçersiz client_id");
   if (!redirectUri || !client.redirect_uris.includes(redirectUri)) {
     return badRequest("Kayıtsız redirect_uri");
   }
@@ -31,15 +32,25 @@ export function GET(req: Request) {
     return badRequest("PKCE (S256) zorunlu");
   }
 
+  // Google dönüşü aynı tarayıcıdan gelmeli; başkasının başlattığı giriş
+  // bağlantısı kurbanın tarayıcısında tamamlanamasın.
+  const nonce = randomBytes(16).toString("base64url");
   const pending: PendingAuthorization = {
     client_id: clientId,
     redirect_uri: redirectUri,
     code_challenge: codeChallenge,
     state: params.get("state"),
+    nonce,
   };
   const googleUrl = buildGoogleAuthUrl(
     getPublicOrigin(req),
-    seal(pending, PENDING_TTL_SECONDS),
+    seal("pending", pending, PENDING_TTL_SECONDS),
   );
-  return Response.redirect(googleUrl, 302);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: googleUrl,
+      "Set-Cookie": `${AUTH_NONCE_COOKIE}=${nonce}; Path=/oauth/callback; Max-Age=${PENDING_TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`,
+    },
+  });
 }

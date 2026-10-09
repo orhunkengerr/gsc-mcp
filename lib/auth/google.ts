@@ -1,3 +1,5 @@
+import { googleRequest } from "@/lib/google-api";
+
 // Google OAuth çağrıları: giriş adresi, kod takası ve token yenileme.
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -40,12 +42,11 @@ export function buildGoogleAuthUrl(origin: string, state: string): string {
 
 async function requestTokens(params: Record<string, string>): Promise<GoogleTokens> {
   const { clientId, clientSecret } = credentials();
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const res = await googleRequest("Google token", GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...params }),
   });
-  if (!res.ok) throw new Error(`Google token hatası: ${res.status} ${await res.text()}`);
   return (await res.json()) as GoogleTokens;
 }
 

@@ -1,33 +1,33 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { querySearchAnalytics, type SearchAnalyticsRequest } from "@/services/gsc/client";
+import {
+  querySearchAnalytics,
+  querySearchAnalyticsAll,
+  type SearchAnalyticsRequest,
+} from "@/services/gsc/client";
 import { googleAccessToken } from "@/tools/auth";
 import {
   DEFAULT_LAG_DAYS,
   DEFAULT_RANGE_DAYS,
+  READ_ONLY,
+  assertRange,
   dateSchema,
+  daysBetween,
+  excludeBrandSchema,
+  filterGroups,
   filtersSchema,
   isoDaysAgo,
   metrics,
+  pctChange,
   round,
+  shiftDate,
   siteUrlSchema,
   textResult,
 } from "@/tools/shared";
 
-const MAX_ROWS = 25000;
 const SORT_FIELDS = ["clicks", "impressions", "position"] as const;
 
 type Metrics = ReturnType<typeof metrics>;
-
-function daysBetween(start: string, end: string): number {
-  return Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1;
-}
-
-function shiftDate(date: string, days: number): string {
-  const d = new Date(date);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
 
 function diff(current?: Metrics, previous?: Metrics) {
   const zero: Metrics = { clicks: 0, impressions: 0, ctr: 0, position: 0 };
@@ -35,8 +35,11 @@ function diff(current?: Metrics, previous?: Metrics) {
   const p = previous ?? zero;
   return {
     clicks: c.clicks - p.clicks,
+    clicksPct: pctChange(c.clicks, p.clicks),
     impressions: c.impressions - p.impressions,
-    ctr: round(c.ctr - p.ctr, 2),
+    impressionsPct: pctChange(c.impressions, p.impressions),
+    // CTR farkı yüzde puandır.
+    ctrPoints: round(c.ctr - p.ctr, 2),
     // İki tarafta da sıralama varsa anlamlı; negatif = yükseldi.
     position: current && previous ? round(c.position - p.position, 1) : null,
   };
@@ -48,10 +51,11 @@ export function registerCompareTools(server: McpServer) {
     {
       title: "Dönem karşılaştırma",
       description:
-        "İki tarih aralığını sorgu, sayfa, ülke veya cihaz bazında karşılaştırır; tıklama, gösterim, CTR ve " +
-        "pozisyon farklarını, yeni çıkan ve kaybolan kayıtları verir. Pozisyon farkında negatif değer yükseliş demektir. " +
+        "İki tarih aralığını sorgu, sayfa, ülke veya cihaz bazında karşılaştırır; tıklama, gösterim (mutlak ve % değişim), " +
+        "CTR (yüzde puan) ve pozisyon farklarını, yeni çıkan ve kaybolan kayıtları verir. Pozisyon farkında negatif değer yükseliş demektir. " +
         "Tarih verilmezse son 28 gün ile ondan önceki 28 gün karşılaştırılır; önceki dönem verilmezse " +
-        "mevcut dönemle aynı uzunlukta hemen önceki aralık kullanılır.",
+        "mevcut dönemle aynı uzunlukta hemen önceki aralık kullanılır. Yıllık karşılaştırma için önceki dönemi açıkça ver. " +
+        "status 'uncertain' ise kayıt satır sınırının altında kalmış olabilir; yeni/kayıp diye yorumlama.",
       inputSchema: z.object({
         siteUrl: siteUrlSchema,
         dimension: z.enum(["query", "page", "country", "device"]).describe("Karşılaştırma kırılımı"),
@@ -60,6 +64,7 @@ export function registerCompareTools(server: McpServer) {
         previousStart: dateSchema.optional(),
         previousEnd: dateSchema.optional(),
         filters: filtersSchema,
+        excludeBrand: excludeBrandSchema,
         sortBy: z.enum(SORT_FIELDS).optional().describe("Farka göre sıralama, varsayılan clicks"),
         direction: z
           .enum(["losers", "gainers", "both"])
@@ -67,7 +72,7 @@ export function registerCompareTools(server: McpServer) {
           .describe("Kaybedenler, kazananlar veya en büyük mutlak değişim; varsayılan both"),
         limit: z.number().int().min(1).max(500).optional().describe("Varsayılan 50"),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY,
     },
     async (args, ctx) => {
       const token = googleAccessToken(ctx);
@@ -77,31 +82,28 @@ export function registerCompareTools(server: McpServer) {
       const length = daysBetween(currentStart, currentEnd);
       const previousEnd = args.previousEnd ?? shiftDate(currentStart, -1);
       const previousStart = args.previousStart ?? shiftDate(previousEnd, -(length - 1));
+      assertRange(currentStart, currentEnd);
+      assertRange(previousStart, previousEnd);
 
-      const filterGroups = args.filters?.length
-        ? [{ groupType: "and" as const, filters: args.filters }]
-        : undefined;
       const base: Omit<SearchAnalyticsRequest, "startDate" | "endDate"> = {
-        dimensionFilterGroups: filterGroups,
+        dimensionFilterGroups: filterGroups(args.filters, args.excludeBrand),
         dataState: "final",
       };
 
-      const [curRows, prevRows, curTotal, prevTotal] = await Promise.all([
-        querySearchAnalytics(token, args.siteUrl, {
-          ...base, startDate: currentStart, endDate: currentEnd,
-          dimensions: [args.dimension], rowLimit: MAX_ROWS,
+      const [cur, prev, curTotal, prevTotal] = await Promise.all([
+        querySearchAnalyticsAll(token, args.siteUrl, {
+          ...base, startDate: currentStart, endDate: currentEnd, dimensions: [args.dimension],
         }),
-        querySearchAnalytics(token, args.siteUrl, {
-          ...base, startDate: previousStart, endDate: previousEnd,
-          dimensions: [args.dimension], rowLimit: MAX_ROWS,
+        querySearchAnalyticsAll(token, args.siteUrl, {
+          ...base, startDate: previousStart, endDate: previousEnd, dimensions: [args.dimension],
         }),
         // Toplamlar ayrı çekiliyor: anonim sorgular satırlarda görünmez.
         querySearchAnalytics(token, args.siteUrl, { ...base, startDate: currentStart, endDate: currentEnd }),
         querySearchAnalytics(token, args.siteUrl, { ...base, startDate: previousStart, endDate: previousEnd }),
       ]);
 
-      const current = new Map(curRows.map((r) => [r.keys?.[0] ?? "", metrics(r)]));
-      const previous = new Map(prevRows.map((r) => [r.keys?.[0] ?? "", metrics(r)]));
+      const current = new Map(cur.rows.map((r) => [r.keys?.[0] ?? "", metrics(r)]));
+      const previous = new Map(prev.rows.map((r) => [r.keys?.[0] ?? "", metrics(r)]));
       const keys = new Set([...current.keys(), ...previous.keys()]);
 
       const sortBy = args.sortBy ?? "clicks";
@@ -109,9 +111,11 @@ export function registerCompareTools(server: McpServer) {
       const rows = [...keys].map((key) => {
         const c = current.get(key);
         const p = previous.get(key);
+        // Bir dönem satır sınırında kesildiyse, o dönemde görünmeyen kayıt sınırın altında kalmış olabilir.
+        const status = !p ? (prev.truncated ? "uncertain" : "new") : !c ? (cur.truncated ? "uncertain" : "lost") : "both";
         return {
           [args.dimension]: key,
-          status: !p ? "new" : !c ? "lost" : "both",
+          status,
           current: c ?? null,
           previous: p ?? null,
           change: diff(c, p),
@@ -143,12 +147,14 @@ export function registerCompareTools(server: McpServer) {
         siteUrl: args.siteUrl,
         currentPeriod: { start: currentStart, end: currentEnd },
         previousPeriod: { start: previousStart, end: previousEnd },
+        units: { ctr: "%", ctrPoints: "yüzde puan", pct: "%" },
         totals: { current: curT ?? null, previous: prevT ?? null, change: diff(curT, prevT) },
         summary: {
           compared: keys.size,
           new: rows.filter((r) => r.status === "new").length,
           lost: rows.filter((r) => r.status === "lost").length,
-          rowLimitReached: curRows.length === MAX_ROWS || prevRows.length === MAX_ROWS,
+          uncertain: rows.filter((r) => r.status === "uncertain").length,
+          rowLimitReached: cur.truncated || prev.truncated,
         },
         rows: ranked,
       });
